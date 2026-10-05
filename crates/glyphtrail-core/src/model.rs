@@ -1,5 +1,23 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
+
+/// Leak `s` into a `&'static str`, deduplicating repeats within one process so
+/// importing many nodes/edges of the same non-built-in kind only leaks once per
+/// distinct label. Used by [`NodeKind::Other`]/[`EdgeKind::Other`] so those
+/// variants can stay `Copy` like the rest of the enum.
+fn intern(s: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let pool = POOL.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = pool.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = guard.get(s) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+    guard.insert(leaked);
+    leaked
+}
 
 /// Stable identifier for a node, derived from repo-relative path, qualified name and kind.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -23,8 +41,7 @@ impl fmt::Display for NodeId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NodeKind {
     Repo,
     Directory,
@@ -64,6 +81,10 @@ pub enum NodeKind {
     Table,
     /// A column within a [`NodeKind::Table`] (contained by it).
     Column,
+    /// A kind outside glyphtrail-core's built-in vocabulary (e.g. an imported
+    /// non-code artifact), carried through by its raw label instead of being
+    /// silently misclassified. Produced only by [`NodeKind::parse`].
+    Other(&'static str),
 }
 
 impl NodeKind {
@@ -92,12 +113,56 @@ impl NodeKind {
             NodeKind::Topic => "topic",
             NodeKind::Table => "table",
             NodeKind::Column => "column",
+            NodeKind::Other(s) => s,
+        }
+    }
+
+    /// Parse a stored/imported kind label, falling back to [`NodeKind::Other`]
+    /// for anything outside the built-in vocabulary instead of silently
+    /// misclassifying it (as the pre-#528 fallback to `SchemaOp` did).
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "repo" => NodeKind::Repo,
+            "directory" => NodeKind::Directory,
+            "file" => NodeKind::File,
+            "module" => NodeKind::Module,
+            "function" => NodeKind::Function,
+            "method" => NodeKind::Method,
+            "class" => NodeKind::Class,
+            "struct" => NodeKind::Struct,
+            "interface" => NodeKind::Interface,
+            "enum" => NodeKind::Enum,
+            "trait" => NodeKind::Trait,
+            "constant" => NodeKind::Constant,
+            "comment" => NodeKind::Comment,
+            "endpoint" => NodeKind::Endpoint,
+            "client_call" => NodeKind::ClientCall,
+            "schema_op" => NodeKind::SchemaOp,
+            "router" => NodeKind::Router,
+            "commit" => NodeKind::Commit,
+            "author" => NodeKind::Author,
+            "identity" => NodeKind::Identity,
+            "topic" => NodeKind::Topic,
+            "table" => NodeKind::Table,
+            "column" => NodeKind::Column,
+            other => NodeKind::Other(intern(other)),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+impl Serialize for NodeKind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for NodeKind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(NodeKind::parse(&String::deserialize(deserializer)?))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgeKind {
     /// Structural containment: dir -> file -> symbol.
     Contains,
@@ -137,6 +202,10 @@ pub enum EdgeKind {
     Tagged,
     /// Atlas: a commit/file belongs to a repo (qualification chain).
     PartOf,
+    /// A kind outside glyphtrail-core's built-in vocabulary (e.g. an imported
+    /// non-code relationship), carried through by its raw label instead of
+    /// being silently misclassified. Produced only by [`EdgeKind::parse`].
+    Other(&'static str),
 }
 
 impl EdgeKind {
@@ -161,7 +230,48 @@ impl EdgeKind {
             EdgeKind::Touched => "touched",
             EdgeKind::Tagged => "tagged",
             EdgeKind::PartOf => "part_of",
+            EdgeKind::Other(s) => s,
         }
+    }
+
+    /// Parse a stored/imported kind label, falling back to [`EdgeKind::Other`]
+    /// for anything outside the built-in vocabulary instead of silently
+    /// misclassifying it (as the pre-#528 fallback to `References` did).
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "contains" => EdgeKind::Contains,
+            "defines" => EdgeKind::Defines,
+            "calls" => EdgeKind::Calls,
+            "imports" => EdgeKind::Imports,
+            "extends" => EdgeKind::Extends,
+            "implements" => EdgeKind::Implements,
+            "documents" => EdgeKind::Documents,
+            "references" => EdgeKind::References,
+            "handles" => EdgeKind::Handles,
+            "mounts" => EdgeKind::Mounts,
+            "exposes" => EdgeKind::Exposes,
+            "invokes" => EdgeKind::Invokes,
+            "reads" => EdgeKind::Reads,
+            "writes" => EdgeKind::Writes,
+            "authored" => EdgeKind::Authored,
+            "alias_of" => EdgeKind::AliasOf,
+            "touched" => EdgeKind::Touched,
+            "tagged" => EdgeKind::Tagged,
+            "part_of" => EdgeKind::PartOf,
+            other => EdgeKind::Other(intern(other)),
+        }
+    }
+}
+
+impl Serialize for EdgeKind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for EdgeKind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(EdgeKind::parse(&String::deserialize(deserializer)?))
     }
 }
 

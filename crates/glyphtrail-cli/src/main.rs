@@ -124,6 +124,17 @@ enum Command {
         #[arg(long, default_value = ".")]
         repo: PathBuf,
     },
+    /// Upsert externally-sourced nodes/edges (e.g. non-code artifacts) into a
+    /// repo's index, merging with whatever `analyze` already wrote. A kind
+    /// string outside glyphtrail-core's built-in vocabulary is kept as-is
+    /// (`NodeKind`/`EdgeKind::Other`) rather than misclassified (#528 spike).
+    Import {
+        /// JSON file: `{ "nodes": [...], "edges": [...] }` (see commands::import).
+        path: PathBuf,
+        /// Repository root whose index to upsert into.
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+    },
     /// Generate a documentation wiki from the graph via an LLM.
     Wiki(commands::wiki::WikiArgs),
     /// Narrate the repository's history from its git log via an LLM.
@@ -394,6 +405,7 @@ fn main() -> anyhow::Result<()> {
         Command::Impact(args) => commands::impact::run(args),
         Command::Drift(args) => commands::drift::run(args),
         Command::Cypher { query, repo } => commands::cypher::run(&repo, &query),
+        Command::Import { path, repo } => commands::import::run(&path, &repo),
         Command::Wiki(args) => commands::wiki::run(args),
         Command::Story(args) => commands::story::run(args),
         Command::Mcp { repo } => {

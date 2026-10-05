@@ -25,6 +25,7 @@ pub mod drift;
 pub mod embed_provider;
 pub mod group;
 pub mod impact;
+pub mod import;
 pub mod link;
 pub mod llm;
 pub mod outline;

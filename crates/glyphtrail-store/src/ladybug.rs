@@ -495,7 +495,7 @@ fn row_to_node(row: &[Value]) -> Node {
     });
     Node {
         id: NodeId(get_str(row, 0)),
-        kind: parse_kind(&get_str(row, 1)),
+        kind: NodeKind::parse(&get_str(row, 1)),
         name: get_str(row, 2),
         qualified_name: get_str(row, 3),
         file: get_str(row, 4),
@@ -503,58 +503,6 @@ fn row_to_node(row: &[Value]) -> Node {
         span,
         doc: opt(get_str(row, 10)),
         signature: opt(get_str(row, 11)),
-    }
-}
-
-fn parse_kind(s: &str) -> NodeKind {
-    match s {
-        "repo" => NodeKind::Repo,
-        "directory" => NodeKind::Directory,
-        "file" => NodeKind::File,
-        "module" => NodeKind::Module,
-        "function" => NodeKind::Function,
-        "method" => NodeKind::Method,
-        "class" => NodeKind::Class,
-        "struct" => NodeKind::Struct,
-        "interface" => NodeKind::Interface,
-        "enum" => NodeKind::Enum,
-        "trait" => NodeKind::Trait,
-        "constant" => NodeKind::Constant,
-        "comment" => NodeKind::Comment,
-        "endpoint" => NodeKind::Endpoint,
-        "client_call" => NodeKind::ClientCall,
-        "router" => NodeKind::Router,
-        "commit" => NodeKind::Commit,
-        "author" => NodeKind::Author,
-        "identity" => NodeKind::Identity,
-        "topic" => NodeKind::Topic,
-        "table" => NodeKind::Table,
-        "column" => NodeKind::Column,
-        _ => NodeKind::SchemaOp,
-    }
-}
-
-fn parse_edge_kind(s: &str) -> EdgeKind {
-    match s {
-        "contains" => EdgeKind::Contains,
-        "defines" => EdgeKind::Defines,
-        "calls" => EdgeKind::Calls,
-        "imports" => EdgeKind::Imports,
-        "extends" => EdgeKind::Extends,
-        "implements" => EdgeKind::Implements,
-        "documents" => EdgeKind::Documents,
-        "handles" => EdgeKind::Handles,
-        "mounts" => EdgeKind::Mounts,
-        "exposes" => EdgeKind::Exposes,
-        "invokes" => EdgeKind::Invokes,
-        "reads" => EdgeKind::Reads,
-        "writes" => EdgeKind::Writes,
-        "authored" => EdgeKind::Authored,
-        "alias_of" => EdgeKind::AliasOf,
-        "touched" => EdgeKind::Touched,
-        "tagged" => EdgeKind::Tagged,
-        "part_of" => EdgeKind::PartOf,
-        _ => EdgeKind::References,
     }
 }
 
@@ -1681,7 +1629,7 @@ impl GraphStore for LadybugStore {
             .map(|r| PendingLink {
                 anchor: NodeId(get_str(r, 0)),
                 name: get_str(r, 1),
-                kind: parse_edge_kind(&get_str(r, 2)),
+                kind: EdgeKind::parse(&get_str(r, 2)),
                 name_is_src: get_i64(r, 3) != 0,
             })
             .collect())
@@ -1840,7 +1788,7 @@ impl GraphStore for LadybugStore {
                     row_to_node(r),
                     // Edge columns follow the node's; NODE_COLS has 12 (incl.
                     // signature, #344), so e.kind/e.confidence are at 12/13.
-                    parse_edge_kind(&get_str(r, 12)),
+                    EdgeKind::parse(&get_str(r, 12)),
                     parse_conf(&get_str(r, 13)),
                 )
             })
@@ -1895,7 +1843,7 @@ impl GraphStore for LadybugStore {
             .map(|r| Edge {
                 src: NodeId(get_str(r, 0)),
                 dst: NodeId(get_str(r, 1)),
-                kind: parse_edge_kind(&get_str(r, 2)),
+                kind: EdgeKind::parse(&get_str(r, 2)),
                 confidence: parse_conf(&get_str(r, 3)),
             })
             .collect();
@@ -2039,7 +1987,7 @@ impl GraphStore for LadybugStore {
             .map(|r| Edge {
                 src: NodeId(get_str(r, 0)),
                 dst: NodeId(get_str(r, 1)),
-                kind: parse_edge_kind(&get_str(r, 2)),
+                kind: EdgeKind::parse(&get_str(r, 2)),
                 confidence: parse_conf(&get_str(r, 3)),
             })
             .collect();
