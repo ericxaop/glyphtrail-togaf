@@ -83,7 +83,7 @@ impl Language {
             "c" | "h" => Language::C,
             "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => Language::Cpp,
             "cs" => Language::CSharp,
-            "rb" => Language::Ruby,
+            "rb" | "rake" => Language::Ruby,
             "kt" | "kts" => Language::Kotlin,
             "sh" | "bash" => Language::Bash,
             "php" => Language::Php,

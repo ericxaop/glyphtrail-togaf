@@ -133,6 +133,74 @@ fn call_qualifier(node: tree_sitter::Node, src: &[u8]) -> Option<String> {
     Some(seg.to_string())
 }
 
+/// Rails ActiveRecord association macros whose first positional argument
+/// names the associated model as a symbol, e.g. `has_many :line_items`
+/// associates with `LineItem`, `belongs_to :account` with `Account`. Returns
+/// the inferred (singularized, camelized) class name for a captured `@call`
+/// node whose text is one of these macros, or `None` otherwise (including
+/// non-Ruby calls that happen to share a macro's name — harmless, since the
+/// `call`-shaped parent/argument check below won't match and this just
+/// returns `None`).
+///
+/// This is a best-effort heuristic, not a full Rails `Inflector`: it covers
+/// common regular English plurals but not irregular ones (`people`,
+/// `children`, ...), and ignores `class_name:`/polymorphic overrides (an
+/// override happens to still work out whenever its value matches the
+/// inferred name, which is the common case).
+fn rails_association_target(
+    method_name: &str,
+    call_capture_node: tree_sitter::Node,
+    src: &[u8],
+) -> Option<String> {
+    if !matches!(
+        method_name,
+        "has_many" | "has_one" | "belongs_to" | "has_and_belongs_to_many"
+    ) {
+        return None;
+    }
+    let call = call_capture_node.parent()?;
+    if call.kind() != "call" {
+        return None;
+    }
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let symbol = args
+        .children(&mut cursor)
+        .find(|c| c.kind() == "simple_symbol")?
+        .utf8_text(src)
+        .ok()?
+        .trim_start_matches(':');
+    Some(classify(symbol))
+}
+
+/// `line_items` -> `LineItem`, `orders` -> `Order`, `categories` -> `Category`.
+fn classify(snake_case_plural: &str) -> String {
+    singularize(snake_case_plural)
+        .split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// Best-effort English singularization for the common regular plural forms
+/// Rails model/table names use. Not exhaustive (see [`rails_association_target`]).
+fn singularize(word: &str) -> String {
+    if let Some(stem) = word.strip_suffix("ies") {
+        format!("{stem}y")
+    } else if word.ends_with("ses") || word.ends_with("xes") || word.ends_with("ches") || word.ends_with("shes") {
+        word[..word.len() - 2].to_string()
+    } else if let Some(stem) = word.strip_suffix('s') {
+        stem.to_string()
+    } else {
+        word.to_string()
+    }
+}
+
 /// Parse `source` and extract raw definitions, calls, imports, bases and comments.
 pub fn parse_source(lang: &Language, source: &str) -> anyhow::Result<ParsedFile> {
     let (Some(grammar), Some(query)) = (grammar(lang), query_source(lang)) else {
@@ -187,11 +255,28 @@ pub fn parse_with(
                 // raw-token heuristic (rust.scm) would otherwise read the defined
                 // name as a call (#5).
                 "call" if is_definition_name(node, src) => {}
-                "call" => out.calls.push(RawRef {
-                    name: text,
-                    byte: node.start_byte(),
-                    scope: call_qualifier(node, src),
-                }),
+                "call" => {
+                    // Rails ActiveRecord association macros (`has_many
+                    // :orders`) never resolve as a `Calls` edge — their
+                    // target (`has_many` itself) has no in-repo definition —
+                    // so the association would otherwise vanish entirely.
+                    // Emit an extra `@ref`-style reference to the *inferred
+                    // associated class* alongside the ordinary call, so it
+                    // resolves (and shows up as a graph edge) whenever that
+                    // class is defined in the same repo.
+                    if let Some(target) = rails_association_target(&text, node, src) {
+                        out.refs.push(RawRef {
+                            name: target,
+                            byte: node.start_byte(),
+                            scope: None,
+                        });
+                    }
+                    out.calls.push(RawRef {
+                        name: text,
+                        byte: node.start_byte(),
+                        scope: call_qualifier(node, src),
+                    });
+                }
                 // A type usage (`@ref`) that is actually a definition's own name
                 // (e.g. the `Protocol` in `enum Protocol`) is skipped — the same
                 // keyword heuristic used for `@call` — so a type does not
@@ -267,5 +352,30 @@ mod tests {
         let parsed = parse_source(&Language::Rust, "struct Foo {}\n").unwrap();
         check!(parsed.defs.iter().any(|d| d.name == "Foo"));
         check!(parsed.refs.iter().all(|r| r.name != "Foo"));
+    }
+
+    // Rails association macros infer their associated class as a reference,
+    // so `has_many`/`belongs_to`/... show up as graph edges when the target
+    // class is defined in the same repo, instead of vanishing entirely (the
+    // literal `has_many` call never resolves — it has no in-repo definition).
+    #[test]
+    fn captures_rails_associations_as_references() {
+        let src = "class Order < ApplicationRecord\n  \
+                   belongs_to :account\n  \
+                   has_many :line_items\n  \
+                   has_one :invoice\n  \
+                   has_and_belongs_to_many :categories\n  \
+                   establish_connection :apsp\n\
+                   end\n";
+        let parsed = parse_source(&Language::Ruby, src).unwrap();
+        check!(parsed.refs.iter().any(|r| r.name == "Account"));
+        check!(parsed.refs.iter().any(|r| r.name == "LineItem"));
+        check!(parsed.refs.iter().any(|r| r.name == "Invoice"));
+        check!(parsed.refs.iter().any(|r| r.name == "Category"));
+        // `establish_connection` isn't an association macro — no inferred ref.
+        check!(parsed.refs.iter().all(|r| r.name != "Apsp"));
+        // The macro calls themselves are still recorded as ordinary (albeit
+        // unresolvable) calls, unchanged from before.
+        check!(parsed.calls.iter().any(|c| c.name == "has_many"));
     }
 }
